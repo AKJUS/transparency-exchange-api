@@ -642,7 +642,11 @@ components:
           "$ref": "#/components/schemas/uuid"
         name:
           type: string
-          description: Product name
+          description: |
+            Product name. Within a TEA server, product names SHOULD be unique among
+            products. Uniqueness is an implementation recommendation, not a hard API
+            requirement. Product and component names are separate namespaces; a product
+            and a component MAY share the same name.
         identifiers:
           type: array
           description: |
@@ -735,7 +739,11 @@ components:
           "$ref": "#/components/schemas/uuid"
         name:
           type: string
-          description: Component name
+          description: |
+            Component name. Within a TEA server, component names SHOULD be unique among
+            components. Uniqueness is an implementation recommendation, not a hard API
+            requirement. Product and component names are separate namespaces; a product
+            and a component MAY share the same name.
         identifiers:
           type: array
           description: List of identifiers for the component
@@ -1696,6 +1704,9 @@ components:
       name: sortOrder
       description: |
         The direction of the sort.
+        
+        The default is `asc` for all paginated resources. Clients that need newest
+        release or collection versions first can request `sortOrder=desc`.
 
         The selected sort order applies to both the primary `sortField` and the
         resource-specific deterministic secondary tie-breaker. For products, components,
