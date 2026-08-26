@@ -1346,7 +1346,7 @@ components:
           description: |
             The Media Type of the document.
 
-            A media type MUST appear at most once across the `formats` of a single TEA
+            A media type Shall appear at most once across the `formats` of a single TEA
             Artifact revision, so that a format can be selected unambiguously by media
             type when downloading its content.
         description:
