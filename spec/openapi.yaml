@@ -553,10 +553,16 @@ paths:
       description: |
         Exchange credentials for a TEA access token.
 
-        A TEA server that requires authentication shall implement this endpoint, and
-        shall support the `client_credentials` grant type with HTTP Basic client
-        authentication (RFC 6749 section 2.3.1, RFC 7617): the API key identifier is
-        sent as the user-id and the API key secret as the password.
+        A TEA server that requires authentication on any of its endpoints shall
+        implement this endpoint, and shall support the `client_credentials` grant type
+        with HTTP Basic client authentication (RFC 6749 section 2.3.1, RFC 7617): the
+        API key identifier is sent as the user-id and the API key secret as the
+        password. A server that requires no authentication need not implement it.
+
+        Clients do not probe this endpoint to discover whether authentication is
+        required: they issue the resource request, and a `401` response carrying a
+        `WWW-Authenticate: Bearer` challenge is the signal to obtain a token here. A
+        `404` from this endpoint means only that it is not implemented.
 
         Servers may support additional grant types for federated identity, for example
         SAML 2.0 assertions (RFC 7522), JWT assertions (RFC 7523), or token exchange

@@ -28,7 +28,11 @@ authorization - does not make much sense, since the information is usually in th
 ## Scope of this specification
 
 This specification does not require a TEA service to authenticate its users. A service that
-publishes openly need not implement any of what follows.
+publishes openly need not implement any of what follows, including the token endpoint; see
+[Servers without authentication](#servers-without-authentication) for what such a server and its
+clients do instead. A service that requires authentication for any of its endpoints is a service
+that requires authentication, and implements the baseline in full; see
+[Mixed servers](#mixed-servers).
 
 Where a service does authenticate, interoperability requires that every TEA client can
 authenticate against every TEA server without server-specific code. This specification therefore
@@ -52,8 +56,8 @@ Two consequences are worth stating explicitly, because they are what make the ba
 
 ## The token endpoint
 
-The token endpoint is `POST /token`, relative to the TEA API base URL, and is defined in
-[the OpenAPI specification](../spec/openapi.yaml). It is an OAuth 2.0 token endpoint as defined
+The token endpoint is `POST /token`, relative to the TEA API base URL, and is defined in the TEA
+OpenAPI specification alongside the resource endpoints. It is an OAuth 2.0 token endpoint as defined
 in [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749) section 3.2; this specification constrains
 which grant types a conforming server has to accept, and adds nothing to the wire format.
 
@@ -131,9 +135,16 @@ not specified. Two rules keep clients simple in spite of that:
 
 * Servers __should__ return `expires_in`, so that a client can obtain a new token before the current
   one expires rather than discovering expiry through a failed request.
-* If a request to a resource endpoint fails with `401` and the `invalid_token` error code, the
-  client __may__ obtain a new token from the token endpoint and retry the request once, as described
-  in RFC 6750 section 3.1. A client __should not__ retry more than once for a single request.
+* If a request to a resource endpoint fails with `401` and the `WWW-Authenticate` challenge header
+  carries `error="invalid_token"`, the client __may__ obtain a new token from the token endpoint and
+  retry the request once, as described in RFC 6750 section 3.1. A client __should not__ retry more
+  than once for a single request. The error code is an attribute of the challenge header; it is not
+  carried in the token, which remains opaque:
+
+  ```http
+  HTTP/1.1 401 Unauthorized
+  WWW-Authenticate: Bearer realm="tea", error="invalid_token", error_description="The access token expired"
+  ```
 
 Between them these cover server-side revocation without the client having to know it happened:
 RFC 6750 defines `invalid_token` as covering tokens that are "expired, revoked, malformed, or invalid
@@ -189,17 +200,76 @@ All of the above assumes TLS. Credentials and bearer tokens are transmitted in t
 layer, so a TEA server __shall__ be reachable only over TLS, and clients __shall__ verify the server
 certificate. This restates RFC 6749 section 3.2 and RFC 6750 section 5.
 
-## Discovery
+## Client flow
 
-A client that has an API key for a service knows to call the token endpoint. A client that does not
-know whether a service requires authentication at all can simply issue the request: a server that
-requires authentication answers `401` with a `WWW-Authenticate` header naming the `Bearer` scheme,
-as described in RFC 6750 section 3.
+Whether a server requires authentication is discovered by using it, not by configuration and not by
+probing the token endpoint. The complete flow for a client that does not know in advance:
+
+1. The client sends the resource request it wants, with no credentials.
+2. If the server does not require authentication for that endpoint, it answers `200` with the
+   resource. The client is done.
+3. If the server requires authentication, it answers `401` with a `WWW-Authenticate` header naming
+   the `Bearer` scheme, as described in RFC 6750 section 3. This challenge is the only signal a
+   client needs.
+4. The client calls `POST /token` with its credential - for the baseline, the API key over HTTP
+   Basic - and receives an access token.
+5. The client repeats the resource request with `Authorization: Bearer <access_token>`, and presents
+   the same token on subsequent requests until it expires or is rejected.
+6. When a later request fails with `401` and `error="invalid_token"`, the client obtains a fresh
+   token and retries that request once, as described above.
+
+A client that already holds an API key for a service __may__ skip steps 1 to 3 and call the token
+endpoint first: being issued a key is itself the signal that the service requires authentication.
+Trying the resource first is for the case where the client does not know.
+
+Two things the flow deliberately avoids. A client __shall not__ probe `/token` to find out whether
+authentication exists; the challenge on the resource is the discovery mechanism, and a `404` from
+`/token` means only that the endpoint is not implemented. And a client __shall not__ send its API key
+to a resource endpoint; the key goes to the token endpoint only, and resource endpoints see bearer
+tokens only.
+
+The cost of the unknown case is one wasted request per server, once. This is the standard HTTP
+pattern and is preferred over any configuration or discovery step a client would otherwise need.
+
+### Servers without authentication
+
+A server that requires no authentication on any endpoint:
+
+* __need not__ implement the token endpoint. There is nothing to exchange: an OAuth 2.0 token
+  response has to carry an access token, and the mandatory grant requires the client to
+  authenticate, so a token endpoint on an open server could only issue a token that means nothing.
+* __shall not__ answer any resource request with `401`. Its clients complete step 2 of the flow
+  above and never look for the token endpoint.
+* __shall__ ignore, rather than reject, an `Authorization: Bearer` header a client presents anyway,
+  for example a client that obtained a token elsewhere or applies one by habit. A token has no
+  meaning on an open server, and ignoring it keeps such clients working.
+
+### Mixed servers
+
+A server may publish some endpoints openly and require authentication for others - for example,
+listing products and releases openly while restricting artifact downloads to customers, as
+described under [Requirements](#requirements). Such a server is a server that requires
+authentication:
+
+* it __shall__ implement the token endpoint and the baseline exchange, because at least one endpoint
+  needs them;
+* its open endpoints behave as on a server without authentication: they answer without a token and
+  ignore a token that is presented;
+* its protected endpoints answer `401` with the `Bearer` challenge when no valid token is presented,
+  which is how a client learns, per endpoint, that a token is needed. A client __should not__ assume
+  that a server which served one endpoint openly will serve every endpoint openly, nor the reverse.
+
+Authorization - which of the protected data an authenticated client may see - is the server's
+decision and is not constrained by this specification; a client with a valid token may still receive
+a filtered view, or `403`/`404` for individual objects.
+
+### Protected resource metadata
 
 Servers that delegate identity to an external provider __may__ publish OAuth 2.0 protected resource
 metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) and reference it from the
 `WWW-Authenticate` challenge, allowing a client to locate the authorization server automatically.
-This is optional; it does not replace the token endpoint, which remains the interoperable baseline.
+This is optional; it does not replace the token endpoint, which remains the interoperable baseline,
+and it does not replace the challenge as the way a client discovers that authentication is required.
 
 ## References
 
