@@ -554,9 +554,12 @@ paths:
         Download the content of the latest revision of a specific TEA Artifact.
 
         Equivalent to the versioned download endpoint, resolving to whichever revision
-        `/artifact/{uuid}/latest` currently reports. Clients that need a stable,
-        reproducible reference should resolve the revision first and use the versioned
-        endpoint, since the artifact this returns changes when a new revision is published.
+        `/artifact/{uuid}/latest` currently reports. The content this returns changes
+        when a new revision is published, so unlike the versioned endpoint the response
+        is not immutable: caches shall revalidate it, which the `ETag` of the resolved
+        revision makes cheap. The `Content-Location` header names the versioned URL the
+        request was resolved to; clients that need a stable, reproducible reference use
+        that URL.
       operationId: downloadLatestArtifact
       parameters:
         - name: uuid
@@ -568,7 +571,7 @@ paths:
         - $ref: "#/components/parameters/artifact-media-type"
       responses:
         '200':
-          $ref: "#/components/responses/artifact-content"
+          $ref: "#/components/responses/artifact-content-latest"
         '302':
           $ref: "#/components/responses/artifact-content-redirect"
         '400':
@@ -585,9 +588,10 @@ paths:
         Download the content of a specific revision of a specific TEA Artifact.
 
         This endpoint returns the bytes of one `format` of the artifact revision. It is
-        an alternative to the external `url` on that format, for TEA servers that host
-        artifact content themselves; a server that does so should publish this endpoint's
-        absolute URL as the format's `url`, so that clients need only follow `url`.
+        how a TEA server hosts artifact content itself: a format that has no external
+        `url` is retrieved from here, selected by its `mediaType`. A format that has a
+        `url` is retrieved from that external location instead, and this endpoint is not
+        required to serve it.
 
         A TEA access token is sent only to the TEA server's own API base URL. External
         `url` targets are retrieved without it - they are either openly accessible,
@@ -629,7 +633,9 @@ paths:
         Download the detached signature for the latest revision of a specific TEA Artifact.
 
         Equivalent to the versioned signature endpoint, resolving to whichever revision
-        `/artifact/{uuid}/latest` currently reports.
+        `/artifact/{uuid}/latest` currently reports. As with the latest content endpoint,
+        the response is not immutable and caches shall revalidate it; `Content-Location`
+        names the versioned URL the request was resolved to.
       operationId: downloadLatestArtifactSignature
       parameters:
         - name: uuid
@@ -641,7 +647,7 @@ paths:
         - $ref: "#/components/parameters/artifact-signature-media-type"
       responses:
         '200':
-          $ref: "#/components/responses/artifact-signature-content"
+          $ref: "#/components/responses/artifact-signature-content-latest"
         '302':
           $ref: "#/components/responses/artifact-content-redirect"
         '400':
@@ -659,9 +665,10 @@ paths:
         specific TEA Artifact.
 
         This is the counterpart of the artifact content endpoint, for TEA servers that
-        host signatures themselves rather than referencing them externally. A server that
-        does so should publish this endpoint's absolute URL as the format's
-        `signatureUrl`.
+        host signatures themselves: a format that has no external `signatureUrl` is
+        retrieved from here, selected by its `mediaType`. A format that has a
+        `signatureUrl` is retrieved from that external location instead, and this
+        endpoint is not required to serve it.
 
         Signatures are per format: each format of a revision is a distinct sequence of
         bytes and therefore has its own signature. The `mediaType` parameter selects which
@@ -1340,44 +1347,50 @@ components:
     artifact-format:
       type: object
       description: A security-related document in a specific format
+      required:
+        - mediaType
       properties:
         mediaType:
           type: string
           description: |
             The Media Type of the document.
 
-            A media type Shall appear at most once across the `formats` of a single TEA
-            Artifact revision, so that a format can be selected unambiguously by media
-            type when downloading its content.
+            A media type shall appear at most once across the `formats` of a single TEA
+            Artifact revision, so that every format can be selected unambiguously by
+            media type when downloading its content or its signature.
         description:
           type: string
           description: A free text describing the TEA Artifact
         url:
           type: string
           description: |
-            Direct download URL for the TEA Artifact.
+            External download URL for this format of the TEA Artifact.
 
-            This may be an external location, or - for a TEA server that hosts artifact
-            content itself - the absolute URL of that server's artifact download endpoint
-            for this format. Clients therefore need only follow this URL, and send their
-            TEA access token only when it is under the API base URL of the TEA server that
-            supplied it.
+            This is always a location outside the TEA API. When present, clients shall
+            retrieve the content from it. When absent, the TEA server hosts the content
+            itself and clients shall retrieve it from the artifact download endpoint,
+            `/artifact/{uuid}/{artifactVersion}/download`, selecting this format by its
+            `mediaType`.
 
-            When the URL is pre-signed it may expire; clients should not retain it beyond
-            the freshness lifetime of the response that carried it.
+            A TEA access token is sent only to the TEA server's own API base URL, never
+            to an external URL: external locations are either openly accessible,
+            pre-signed, or covered by credentials the client arranges separately. When
+            the URL is pre-signed it may expire; clients should not retain it beyond the
+            freshness lifetime of the response that carried it.
           format: url
         signatureUrl:
           type: string
           description: |
-            Direct download URL for a detached signature of this format of the TEA
+            External download URL for a detached signature of this format of the TEA
             Artifact.
 
-            As with `url`, this may be an external location or - for a TEA server that
-            hosts signatures itself - the absolute URL of that server's artifact signature
-            download endpoint for this format. The same rules apply: clients send their
-            TEA access token only when the URL is under the API base URL of the TEA server
-            that supplied it, and do not retain a pre-signed URL beyond the freshness
-            lifetime of the response that carried it.
+            As with `url`, this is always a location outside the TEA API. When present,
+            clients shall retrieve the signature from it. When absent, clients shall
+            retrieve it from the artifact signature download endpoint,
+            `/artifact/{uuid}/{artifactVersion}/signature/download`, selecting this
+            format by its `mediaType`; that endpoint returns `404` when no signature is
+            published for the format. The same access token and pre-signed URL rules
+            as for `url` apply.
 
             This specification does not define which signature technology is used, nor
             model the signing algorithm, key, or certificate chain.
@@ -1773,6 +1786,79 @@ components:
         - hasNext: false
           results: []
 
+  headers:
+    artifact-content-disposition:
+      description: |
+        Suggested filename for the artifact content, as an `attachment` disposition
+        per RFC 6266.
+      schema:
+        type: string
+        examples:
+          - attachment; filename="log4j-core-2.24.3-cyclonedx.json"
+    artifact-etag:
+      description: |
+        Strong entity tag for the content. A TEA Artifact revision is immutable, so
+        the entity tag for a given uuid, version and format never changes.
+      schema:
+        type: string
+    artifact-repr-digest:
+      description: |
+        Digest of the content as defined in RFC 9530, allowing a client to verify the
+        bytes against the `checksums` published in the artifact metadata.
+      schema:
+        type: string
+    artifact-cache-control-immutable:
+      description: |
+        Servers should mark the content of a specific revision as immutable and
+        cacheable: the bytes for a given uuid, version and format never change.
+      schema:
+        type: string
+        examples:
+          - 'public, max-age=31536000, immutable'
+    artifact-cache-control-latest:
+      description: |
+        The latest revision is a moving target: which revision it resolves to changes
+        when a new revision is published. Servers shall not mark it immutable and
+        should require revalidation, so that a cache reuses stored content only after
+        confirming, through the `ETag`, that the latest revision has not changed.
+      schema:
+        type: string
+        examples:
+          - 'no-cache'
+    artifact-content-location:
+      description: |
+        The versioned download URL of the revision this response was resolved to,
+        per RFC 9110 section 8.7. A client that needs a stable, reproducible reference
+        to the bytes it received uses this URL rather than the `latest` URL.
+      schema:
+        type: string
+        format: uri-reference
+        examples:
+          - /artifact/2ff3ae7c-8eab-4e0b-9b8b-1a0c4c4c1c2d/3/download
+    signature-content-disposition:
+      description: |
+        Suggested filename for the signature, as an `attachment` disposition per
+        RFC 6266.
+      schema:
+        type: string
+        examples:
+          - attachment; filename="log4j-core-2.24.3-cyclonedx.json.sig"
+    signature-etag:
+      description: |
+        Strong entity tag for the signature. A signature belongs to one format of one
+        immutable revision, so it is fixed with the revision: content that is re-signed
+        is published as a new revision.
+      schema:
+        type: string
+    signature-content-location:
+      description: |
+        The versioned signature download URL of the revision this response was resolved
+        to, per RFC 9110 section 8.7.
+      schema:
+        type: string
+        format: uri-reference
+        examples:
+          - /artifact/2ff3ae7c-8eab-4e0b-9b8b-1a0c4c4c1c2d/3/signature/download
   responses:
     204-common-delete:
       description: Object deleted successfully
@@ -1793,35 +1879,43 @@ components:
       description: |
         The content of the requested TEA Artifact format.
 
-        The `Content-Type` is the `mediaType` of the format returned, falling back to
-        `application/octet-stream` only when the format declares no media type.
+        The `Content-Type` is the `mediaType` of the format returned.
       headers:
         Content-Disposition:
-          description: |
-            Suggested filename for the artifact content, as an `attachment` disposition
-            per RFC 6266.
-          schema:
-            type: string
-            examples:
-              - attachment; filename="log4j-core-2.24.3-cyclonedx.json"
+          $ref: "#/components/headers/artifact-content-disposition"
         ETag:
-          description: |
-            Strong entity tag for the content. A TEA Artifact revision is immutable, so
-            the entity tag for a given uuid, version and format never changes.
-          schema:
-            type: string
+          $ref: "#/components/headers/artifact-etag"
         Cache-Control:
-          description: Servers should mark artifact content as immutable and cacheable.
-          schema:
-            type: string
-            examples:
-              - 'public, max-age=31536000, immutable'
+          $ref: "#/components/headers/artifact-cache-control-immutable"
         Repr-Digest:
-          description: |
-            Digest of the content as defined in RFC 9530, allowing a client to verify the
-            bytes against the `checksums` published in the artifact metadata.
+          $ref: "#/components/headers/artifact-repr-digest"
+      content:
+        application/octet-stream:
           schema:
             type: string
+            format: binary
+    artifact-content-latest:
+      description: |
+        The content of the selected format of the latest revision of the TEA Artifact,
+        as resolved at the time of the request.
+
+        Identical to `artifact-content` except for its cache policy: the latest revision
+        changes when a new revision is published, so the response is not immutable and
+        a cache shall revalidate it before reuse. The `ETag` is that of the resolved
+        revision's content, so revalidation succeeds with `304 Not Modified` until a new
+        revision is published. `Content-Location` names the versioned URL the request
+        was resolved to.
+      headers:
+        Content-Disposition:
+          $ref: "#/components/headers/artifact-content-disposition"
+        ETag:
+          $ref: "#/components/headers/artifact-etag"
+        Cache-Control:
+          $ref: "#/components/headers/artifact-cache-control-latest"
+        Content-Location:
+          $ref: "#/components/headers/artifact-content-location"
+        Repr-Digest:
+          $ref: "#/components/headers/artifact-repr-digest"
       content:
         application/octet-stream:
           schema:
@@ -1836,25 +1930,34 @@ components:
         This specification does not require servers to identify the signature technology.
       headers:
         Content-Disposition:
-          description: |
-            Suggested filename for the signature, as an `attachment` disposition per
-            RFC 6266.
-          schema:
-            type: string
-            examples:
-              - attachment; filename="log4j-core-2.24.3-cyclonedx.json.sig"
+          $ref: "#/components/headers/signature-content-disposition"
         ETag:
-          description: |
-            Strong entity tag for the signature. The signature of an immutable artifact
-            revision is itself stable, unless the publisher re-signs the content.
-          schema:
-            type: string
+          $ref: "#/components/headers/signature-etag"
         Cache-Control:
-          description: Servers should mark signatures as cacheable.
+          $ref: "#/components/headers/artifact-cache-control-immutable"
+      content:
+        application/octet-stream:
           schema:
             type: string
-            examples:
-              - 'public, max-age=31536000, immutable'
+            format: binary
+    artifact-signature-content-latest:
+      description: |
+        The detached signature for the selected format of the latest revision of the TEA
+        Artifact, as resolved at the time of the request.
+
+        Identical to `artifact-signature-content` except for its cache policy: the latest
+        revision changes when a new revision is published, so the response is not
+        immutable and a cache shall revalidate it before reuse. `Content-Location` names
+        the versioned URL the request was resolved to.
+      headers:
+        Content-Disposition:
+          $ref: "#/components/headers/signature-content-disposition"
+        ETag:
+          $ref: "#/components/headers/signature-etag"
+        Cache-Control:
+          $ref: "#/components/headers/artifact-cache-control-latest"
+        Content-Location:
+          $ref: "#/components/headers/signature-content-location"
       content:
         application/octet-stream:
           schema:
