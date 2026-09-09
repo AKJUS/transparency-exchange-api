@@ -357,10 +357,19 @@ A TEA Artifact object contains the following fields:
   An array of objects, each representing the same artefact content in a different format.
   The order of the list is not significant.
   Each format object includes:
-  - __mediaType__: The MIME type of the document (e.g., `application/vnd.cyclonedx+xml`).
+  - __mediaType__: The media type of the document (e.g., `application/vnd.cyclonedx+xml`).
+    Required. A media type appears at most once across the formats of a TEA Artifact revision,
+    so that a format can be selected unambiguously by media type.
   - __description__: A free-text description of the artefact format.
-  - __url__: A direct download URL for the artefact. This must point to an immutable resource.
-  - __signatureUrl__ (optional): A direct download URL for a detached digital signature of the artefact, if available.
+  - __url__ (optional): An external download URL for the artefact, outside the TEA API.
+    This must point to an immutable resource.
+    If present, clients retrieve the content from it.
+    If absent, the TEA server hosts the content itself and clients retrieve it from the
+    artifact download endpoint (`/artifact/{uuid}/{version}/download`), selecting the format by its media type.
+  - __signatureUrl__ (optional): An external download URL for a detached digital signature of the artefact, outside the TEA API.
+    If present, clients retrieve the signature from it.
+    If absent, clients retrieve it from the artifact signature download endpoint
+    (`/artifact/{uuid}/{version}/signature/download`), which answers `404` when no signature is published for the format.
   - __checksums__:  
     An array of checksum objects for the artefact, each containing:
     - __algType__: The checksum algorithm used (e.g., `SHA_256`, `SHA3_512`).
@@ -370,8 +379,11 @@ A TEA Artifact object contains the following fields:
 
 - The `formats` array allows the same artefact to be provided in multiple encodings or serializations (e.g., JSON, XML).
 - The `checksums` field provides integrity verification for each artefact format.
-- The `signatureUrl` enables consumers to verify the authenticity of the artefact using detached signatures.
+- Detached signatures, whether at `signatureUrl` or served by the TEA server, enable consumers to verify the authenticity of the artefact.
+- `url` and `signatureUrl` are always external locations; a TEA server that hosts content or signatures itself omits them and serves the bytes from its download endpoints.
+  A TEA access token is sent only to the TEA server's own API, never to an external URL.
 - Artefacts should be published to stable, versioned URLs to ensure immutability and traceability.
+  The `latest` download endpoints are mutable by design and must not be used as a format's `url` or `signatureUrl`.
 
 ## The reason for TCO update enum
 
